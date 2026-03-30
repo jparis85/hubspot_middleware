@@ -2,6 +2,12 @@ require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
 const cron = require('node-cron');
+const {
+  getDealById,
+  getCompanyById,
+  getContactById,
+  searchClosedWonDealsSince,
+} = require('./hubspotService');
 
 const app = express();
 app.use(express.json());
@@ -10,16 +16,6 @@ const PORT = process.env.PORT || 3000;
 
 let lastPollTime = new Date(Date.now() - 15 * 60 * 1000).toISOString();
 let isPolling = false;
-
-// ==========================
-// 🔹 HUBSPOT CONFIG
-// ==========================
-const HUBSPOT_BASE = 'https://api.hubapi.com';
-
-const hubspotHeaders = {
-  Authorization: `Bearer ${process.env.HUBSPOT_PRIVATE_APP_TOKEN}`,
-  'Content-Type': 'application/json',
-};
 
 // ==========================
 // 🔹 CLICKUP CONFIG
@@ -32,12 +28,7 @@ const clickupHeaders = {
 };
 
 async function syncDealToClickUp(dealId) {
-  const dealRes = await axios.get(
-    `${HUBSPOT_BASE}/crm/v3/objects/deals/${dealId}?properties=dealname,amount,closedate,hs_is_closed_won,pipeline,hubspot_owner_id,end_of_campaign_date,hs_lastmodifieddate&associations=companies,contacts`,
-    { headers: hubspotHeaders }
-  );
-
-  const deal = dealRes.data;
+  const deal = await getDealById(dealId);
 
   const companyId = deal.associations?.companies?.results?.[0]?.id || null;
   const contactId = deal.associations?.contacts?.results?.[0]?.id || null;
@@ -46,19 +37,11 @@ async function syncDealToClickUp(dealId) {
   let contact = null;
 
   if (companyId) {
-    const companyRes = await axios.get(
-      `${HUBSPOT_BASE}/crm/v3/objects/companies/${companyId}?properties=name,domain,website,industry,address,city,state,zip,phone`,
-      { headers: hubspotHeaders }
-    );
-    company = companyRes.data;
+    company = await getCompanyById(companyId);
   }
 
   if (contactId) {
-    const contactRes = await axios.get(
-      `${HUBSPOT_BASE}/crm/v3/objects/contacts/${contactId}?properties=email,firstname,lastname,phone,dba,legal_business_name,owned_locations`,
-      { headers: hubspotHeaders }
-    );
-    contact = contactRes.data;
+    contact = await getContactById(contactId);
   }
 
   const canonical = {
@@ -92,9 +75,6 @@ async function syncDealToClickUp(dealId) {
   };
 }
 
-// ==========================
-// 🔹 CLICKUP FUNCTION (PUT HERE)
-// ==========================
 async function findExistingTaskByName(taskName) {
   const res = await axios.get(
     `${CLICKUP_BASE}/list/${process.env.CLICKUP_LIST_ID}/task`,
@@ -103,9 +83,11 @@ async function findExistingTaskByName(taskName) {
 
   const tasks = res.data.tasks || [];
 
-  return tasks.find(
-    (task) => task.name.trim().toLowerCase() === taskName.trim().toLowerCase()
-  ) || null;
+  return (
+    tasks.find(
+      (task) => task.name.trim().toLowerCase() === taskName.trim().toLowerCase()
+    ) || null
+  );
 }
 
 async function buildClickUpPayload(canonical) {
@@ -122,7 +104,7 @@ async function buildClickUpPayload(canonical) {
       `Number of locations: ${canonical.location_count || ''}`,
       `Store name: ${canonical.dba_store_name || ''}`,
       `Hubspot Company ID: ${canonical.hubspot_company_id || ''}`,
-      `Hubspot Deal ID: ${canonical.hubspot_deal_id || ''}`
+      `Hubspot Deal ID: ${canonical.hubspot_deal_id || ''}`,
     ].join('\n'),
 
     custom_fields: [
@@ -216,19 +198,10 @@ async function upsertClickUpClientTask(canonical) {
   return await createClickUpClientTask(canonical);
 }
 
-// ==========================
-// 🔹 HEALTH CHECK
-// ==========================
 app.get('/', (req, res) => {
   res.send('Server is running');
 });
 
-// ==========================
-// 🔹 MAIN WEBHOOK ROUTE
-// ==========================
-// ==========================
-// 🔹 MAIN WEBHOOK ROUTE
-// ==========================
 app.post('/hubspot/webhook', async (req, res) => {
   try {
     const { dealId } = req.body;
@@ -265,45 +238,7 @@ async function pollClosedWonDeals() {
   try {
     console.log(`Polling HubSpot for Closed Won deals since ${lastPollTime}`);
 
-    const searchBody = {
-      filterGroups: [
-        {
-          filters: [
-            {
-              propertyName: 'hs_is_closed_won',
-  operator: 'EQ',
-  value: process.env.HUBSPOT_IS_CLOSED_WON,
-            },
-            {
-              propertyName: 'hs_lastmodifieddate',
-              operator: 'GTE',
-              value: lastPollTime,
-            },
-          ],
-        },
-      ],
-      properties: [
-        'dealname',
-        'dealstage',
-        'hs_lastmodifieddate',
-        'hs_is_closed_won',
-      ],
-      sorts: [
-        {
-          propertyName: 'hs_lastmodifieddate',
-          direction: 'ASCENDING',
-        },
-      ],
-      limit: 100,
-    };
-
-    const searchRes = await axios.post(
-      `${HUBSPOT_BASE}/crm/v3/objects/0-3/search`,
-      searchBody,
-      { headers: hubspotHeaders }
-    );
-
-    const deals = searchRes.data.results || [];
+    const deals = await searchClosedWonDealsSince(lastPollTime);
     console.log(`Found ${deals.length} matching deal(s)`);
 
     for (const deal of deals) {
@@ -336,9 +271,6 @@ if (process.env.POLL_ENABLED === 'true') {
   console.log('HubSpot polling enabled: every 5 minutes');
 }
 
-// ==========================
-// 🔹 START SERVER
-// ==========================
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
