@@ -33,7 +33,7 @@ const clickupHeaders = {
 
 async function syncDealToClickUp(dealId) {
   const dealRes = await axios.get(
-    `${HUBSPOT_BASE}/crm/v3/objects/deals/${dealId}?properties=dealname,amount,closedate,dealstage,pipeline,hubspot_owner_id,end_of_campaign_date,hs_lastmodifieddate&associations=companies,contacts`,
+    `${HUBSPOT_BASE}/crm/v3/objects/deals/${dealId}?properties=dealname,amount,closedate,hs_is_closed_won,pipeline,hubspot_owner_id,end_of_campaign_date,hs_lastmodifieddate&associations=companies,contacts`,
     { headers: hubspotHeaders }
   );
 
@@ -270,9 +270,9 @@ async function pollClosedWonDeals() {
         {
           filters: [
             {
-              propertyName: 'dealstage',
-              operator: 'EQ',
-              value: process.env.HUBSPOT_CLOSED_WON_STAGE,
+              propertyName: 'hs_is_closed_won',
+  operator: 'EQ',
+  value: process.env.HUBSPOT_IS_CLOSED_WON,
             },
             {
               propertyName: 'hs_lastmodifieddate',
@@ -286,6 +286,7 @@ async function pollClosedWonDeals() {
         'dealname',
         'dealstage',
         'hs_lastmodifieddate',
+        'hs_is_closed_won',
       ],
       sorts: [
         {
